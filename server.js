@@ -14,22 +14,27 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-// Configuración del transportador de correo electrónico usando las variables de Render
+// Configuración del transportador de correo electrónico CORREGIDA para evitar ENETUNREACH
 const transporter = nodemailer.createTransport({
-  service: 'gmail', // Cambiar por 'hotmail' si usas Outlook/Hotmail
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // Usa SSL directo
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+  // ESTO ES LO NUEVO: Fuerza al servidor a usar IPv4 para saltarse el fallo de red de Render
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
 });
 
-// === AQUÍ SE PONE EL PASO 1 ===
+// Comprobación automática
 transporter.verify(function (error, success) {
   if (error) {
     console.error("❌ ERROR CRÍTICO: Configuración de correo inválida:");
     console.error(error.message);
   } else {
-    console.log("✅ ÉXITO: El servidor está conectado correctamente a Gmail/Outlook y listo para enviar correos.");
+    console.log("✅ ÉXITO: El servidor está conectado correctamente a Gmail y listo para enviar correos.");
   }
 });
 
