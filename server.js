@@ -16,18 +16,12 @@ const pool = new Pool({
 
 // Configuración del transportador de correo electrónico CORREGIDA para evitar ENETUNREACH
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, // Usa SSL directo
+  service: 'hotmail', // Esto sirve tanto para @hotmail.com como para @outlook.com
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
-  // ESTO ES LO NUEVO: Fuerza al servidor a usar IPv4 para saltarse el fallo de red de Render
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
 });
-
 // Comprobación automática
 transporter.verify(function (error, success) {
   if (error) {
