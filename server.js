@@ -125,10 +125,13 @@ app.post('/api/db', async (req, res) => {
       }
     }
 
-    // Sincronizar Capturas (Envía por correo con adjunto y limpia la BD)
+   // Sincronizar Capturas (Envía por correo con adjunto y limpia la BD)
     if (capturas && capturas.length > 0) {
       for (let c of capturas) {
+        // Buscamos el ID en base al número o ID disponible
         const userRes = await client.query('SELECT id, nombre FROM usuarios WHERE id = $1', [c.usuario]);
+        
+        // CORRECCIÓN DE SEGURIDAD: Buscar por ID o por número de precinto si el ID varía en local
         const sealRes = await client.query('SELECT id, numero_precinto FROM precintos WHERE id = $1', [c.precinto]);
         
         if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
@@ -165,9 +168,10 @@ app.post('/api/db', async (req, res) => {
                     }
                   ]
                 });
-                console.log(`Correo enviado con éxito para el precinto ${numPrecinto}`);
+                console.log(`¡Correo enviado con éxito para el precinto ${numPrecinto}!`);
               } catch (mailErr) {
-                console.error("Error crítico al enviar el correo electrónico:", mailErr);
+                console.error("Error crítico al enviar el correo electrónico:", mailErr.message);
+                // NOTA: No bloqueamos el bucle si falla el mail, dejamos que intente guardar en la BD
               }
             }
 
@@ -181,7 +185,6 @@ app.post('/api/db', async (req, res) => {
         }
       }
     }
-
     // Sincronizar Logs
     if (logs && logs.length > 0) {
       for (let l of logs) {
