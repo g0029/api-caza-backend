@@ -15,7 +15,10 @@ const pool = new Pool({
 app.get('/api/db', async (req, res) => {
   try {
     const usuariosRes = await pool.query('SELECT id, nombre, usuario, contrasena_hash as password, rol, bloqueado FROM usuarios ORDER BY id ASC');
-    const precintosRes = await pool.query('SELECT id, numero_precinto, estado FROM precintos ORDER BY id ASC');
+    
+    // MODIFICADO: Ahora solicita la columna 'coto' a Supabase
+    const precintosRes = await pool.query('SELECT id, numero_precinto, estado, coto FROM precintos ORDER BY id ASC');
+    
     const asignacionesRes = await pool.query('SELECT id, usuario, precinto, coto, paraje, fecha, estado FROM asignaciones ORDER BY id DESC');
     const capturasRes = await pool.query('SELECT id, precinto, usuario, imagen, observaciones, coto, paraje, fecha, estado FROM capturas ORDER BY id DESC');
     const logsRes = await pool.query('SELECT l.id, l.accion, u.usuario, l.fecha FROM logs l LEFT JOIN usuarios u ON l.usuario = u.id ORDER BY l.id DESC');
@@ -35,12 +38,12 @@ app.get('/api/db', async (req, res) => {
       logs: logsMapeados
     });
   } catch (err) {
-    console.error("Error al leer de Supabase:", err.message);
-    res.status(500).send('Error al leer las tablas');
+    console.error(err);
+    res.status(500).send('Error al leer la base de datos');
   }
 });
 
-// 2. RUTA PARA GUARDAR Y RELLENAR TABLAS AUTOMÁTICAMENTE (CORREGIDA)
+// 2. RUTA PARA GUARDAR Y RELLENAR TABLAS AUTOMÁTICAMENTE
 app.post('/api/db', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -66,79 +69,67 @@ app.post('/api/db', async (req, res) => {
       }
     }
 
-    // Sincronizar Precintos
+    // Sincronizar Precintos (MODIFICADO para incluir la columna 'coto')
     if (precintos && precintos.length > 0) {
       for (let p of precintos) {
         const existe = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [p.numero_precinto]);
         if (existe.rows.length === 0) {
           await client.query(
-            `INSERT INTO precintos (numero_precinto, estado) VALUES ($1, $2)`,
-            [p.numero_precinto, p.estado]
+            `INSERT INTO precintos (estado, numero_precinto, coto) VALUES ($1, $2, $3)`,
+            [p.estado, p.numero_precinto, p.coto || null]
           );
         } else {
           await client.query(
-            `UPDATE precintos SET estado = $2 WHERE numero_precinto = $1`,
-            [p.numero_precinto, p.estado]
+            `UPDATE precintos SET estado = $1, coto = $2 WHERE numero_precinto = $3`,
+            [p.estado, p.coto || null, p.numero_precinto]
           );
         }
       }
     }
 
-    // Sincronizar Asignaciones (Corregido para buscar IDs reales de Supabase)
+    // Sincronizar Asignaciones
     if (asignaciones && asignaciones.length > 0) {
       for (let a of asignaciones) {
-        // Encontramos los datos en texto que envió el frontend
-        const usuarioObjeto = usuarios.find(u => u.id === a.usuario);
-        const precintoObjeto = precintos.find(p => p.id === a.precinto);
-
-        if (usuarioObjeto && precintoObjeto) {
-          // Buscamos cuál es el ID real en Supabase para ese usuario y ese número de precinto
-          const userRes = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [usuarioObjeto.usuario]);
-          const sealRes = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [precintoObjeto.numero_precinto]);
+        const userRes = await client.query('SELECT id FROM usuarios WHERE id = $1', [a.usuario]);
+        const sealRes = await client.query('SELECT id FROM precintos WHERE id = $1', [a.precinto]);
+        
+        if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
+          const uId = userRes.rows[0].id;
+          const pId = sealRes.rows[0].id;
           
-          if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
-            const uId = userRes.rows[0].id;
-            const pId = sealRes.rows[0].id;
-            
-            const existe = await client.query('SELECT id FROM asignaciones WHERE usuario = $1 AND precinto = $2 AND fecha = $3', [uId, pId, a.fecha]);
-            if (existe.rows.length === 0) {
-              await client.query(
-                `INSERT INTO asignaciones (usuario, precinto, coto, paraje, fecha, estado) VALUES ($1, $2, $3, $4, $5, $6)`,
-                [uId, pId, a.coto, a.paraje, a.fecha, a.estado]
-              );
-            } else {
-              await client.query(
-                `UPDATE asignaciones SET estado = $4 WHERE usuario = $1 AND precinto = $2 AND fecha = $3`,
-                [uId, pId, a.fecha, a.estado]
-              );
-            }
+          const existe = await client.query('SELECT id FROM asignaciones WHERE usuario = $1 AND precinto = $2 AND fecha = $3', [uId, pId, a.fecha]);
+          if (existe.rows.length === 0) {
+            await client.query(
+              `INSERT INTO asignaciones (usuario, precinto, coto, paraje, fecha, estado) VALUES ($1, $2, $3, $4, $5, $6)`,
+              [uId, pId, a.coto, a.paraje, a.fecha, a.estado]
+            );
+          } else {
+            await client.query(
+              `UPDATE asignaciones SET estado = $4 WHERE usuario = $1 AND precinto = $2 AND fecha = $3`,
+              [uId, pId, a.fecha, a.estado]
+            );
           }
         }
       }
     }
 
-    // Sincronizar Capturas (Corregido para buscar IDs reales de Supabase)
+    // Sincronizar Capturas
     if (capturas && capturas.length > 0) {
       for (let c of capturas) {
-        const usuarioObjeto = usuarios.find(u => u.id === c.usuario);
-        const precintoObjeto = precintos.find(p => p.id === c.precinto);
+        const userRes = await client.query('SELECT id FROM usuarios WHERE id = $1', [c.usuario]);
+        const sealRes = await client.query('SELECT id FROM precintos WHERE id = $1', [c.precinto]);
+        
+        if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
+          const uId = userRes.rows[0].id;
+          const pId = sealRes.rows[0].id;
 
-        if (usuarioObjeto && precintoObjeto) {
-          const userRes = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [usuarioObjeto.usuario]);
-          const sealRes = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [precintoObjeto.numero_precinto]);
-          
-          if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
-            const uId = userRes.rows[0].id;
-            const pId = sealRes.rows[0].id;
-
-            const existe = await client.query('SELECT id FROM capturas WHERE precinto = $1 AND usuario = $2 AND fecha = $3', [pId, uId, c.fecha]);
-            if (existe.rows.length === 0) {
-              await client.query(
-                `INSERT INTO capturas (precinto, usuario, imagen, observaciones, coto, paraje, fecha, estado) 
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                [pId, uId, c.imagen || '', c.observaciones, c.coto, c.paraje, c.fecha, c.estado]
-              );
-            }
+          const existe = await client.query('SELECT id FROM capturas WHERE precinto = $1 AND usuario = $2 AND fecha = $3', [pId, uId, c.fecha]);
+          if (existe.rows.length === 0) {
+            await client.query(
+              `INSERT INTO capturas (precinto, usuario, imagen, observaciones, coto, paraje, fecha, estado) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [pId, uId, c.imagen || '', c.observaciones, c.coto, c.paraje, c.fecha, c.estado]
+            );
           }
         }
       }
@@ -170,11 +161,8 @@ app.post('/api/db', async (req, res) => {
     client.release();
   }
 });
-app.get('/', (req, res) => {
-  res.send('Servidor API activo y conectado de forma estricta a Supabase.');
-});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor API corriendo en el puerto ${PORT}`);
+  console.log(`Servidor ejecutándose en el puerto ${PORT}`);
 });
