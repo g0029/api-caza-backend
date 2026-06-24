@@ -23,6 +23,16 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// === AQUÍ SE PONE EL PASO 1 ===
+transporter.verify(function (error, success) {
+  if (error) {
+    console.error("❌ ERROR CRÍTICO: Configuración de correo inválida:");
+    console.error(error.message);
+  } else {
+    console.log("✅ ÉXITO: El servidor está conectado correctamente a Gmail/Outlook y listo para enviar correos.");
+  }
+});
+
 // 1. RUTA PARA LEER DATOS DESDE SUPABASE
 app.get('/api/db', async (req, res) => {
   try {
