@@ -72,29 +72,29 @@ app.post('/api/db', async (req, res) => {
         const existe = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [p.numero_precinto]);
         if (existe.rows.length === 0) {
           await client.query(
-            `INSERT INTO precintos (estado, numero_precinto) VALUES ($1, $2)`,
-            [p.estado, p.numero_precinto]
+            `INSERT INTO precintos (numero_precinto, estado) VALUES ($1, $2)`,
+            [p.numero_precinto, p.estado]
           );
         } else {
           await client.query(
-            `UPDATE precintos SET estado = $1 WHERE numero_precinto = $2`,
-            [p.estado, p.numero_precinto]
+            `UPDATE precintos SET estado = $2 WHERE numero_precinto = $1`,
+            [p.numero_precinto, p.estado]
           );
         }
       }
     }
 
-    // Sincronizar Asignaciones (Corregido para buscar por los datos reales del objeto enviado)
+    // Sincronizar Asignaciones (Corregido para buscar IDs reales de Supabase)
     if (asignaciones && asignaciones.length > 0) {
       for (let a of asignaciones) {
-        // Obtenemos el objeto de usuario y precinto completo desde el frontend para saber sus strings reales
-        const userMismo = usuarios.find(u => u.id === a.usuario);
-        const sealMismo = precintos.find(p => p.id === a.precinto);
+        // Encontramos los datos en texto que envió el frontend
+        const usuarioObjeto = usuarios.find(u => u.id === a.usuario);
+        const precintoObjeto = precintos.find(p => p.id === a.precinto);
 
-        if (userMismo && sealMismo) {
-          // Buscamos el ID real asignado por Supabase usando los campos únicos
-          const userRes = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [userMismo.usuario]);
-          const sealRes = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [sealMismo.numero_precinto]);
+        if (usuarioObjeto && precintoObjeto) {
+          // Buscamos cuál es el ID real en Supabase para ese usuario y ese número de precinto
+          const userRes = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [usuarioObjeto.usuario]);
+          const sealRes = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [precintoObjeto.numero_precinto]);
           
           if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
             const uId = userRes.rows[0].id;
@@ -117,15 +117,15 @@ app.post('/api/db', async (req, res) => {
       }
     }
 
-    // Sincronizar Capturas (Corregido del mismo modo)
+    // Sincronizar Capturas (Corregido para buscar IDs reales de Supabase)
     if (capturas && capturas.length > 0) {
       for (let c of capturas) {
-        const userMismo = usuarios.find(u => u.id === c.usuario);
-        const sealMismo = precintos.find(p => p.id === c.precinto);
+        const usuarioObjeto = usuarios.find(u => u.id === c.usuario);
+        const precintoObjeto = precintos.find(p => p.id === c.precinto);
 
-        if (userMismo && sealMismo) {
-          const userRes = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [userMismo.usuario]);
-          const sealRes = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [sealMismo.numero_precinto]);
+        if (usuarioObjeto && precintoObjeto) {
+          const userRes = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [usuarioObjeto.usuario]);
+          const sealRes = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [precintoObjeto.numero_precinto]);
           
           if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
             const uId = userRes.rows[0].id;
@@ -170,7 +170,6 @@ app.post('/api/db', async (req, res) => {
     client.release();
   }
 });
-
 app.get('/', (req, res) => {
   res.send('Servidor API activo y conectado de forma estricta a Supabase.');
 });
