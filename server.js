@@ -2,20 +2,35 @@ require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const nodemailer = require('nodemailer'); // NUEVO: Para los correos automáticos
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// MODIFICADO: Ampliamos el límite porque los strings de fotos base64 pueden ser muy largos
+app.use(express.json({ limit: '50mb' })); 
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+});
+
+// Configuración del transportador de correo electrónico usando las variables de Render
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // Cambiar por 'hotmail' si usas Outlook/Hotmail
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
 });
 
 // 1. RUTA PARA LEER DATOS DESDE SUPABASE
 app.get('/api/db', async (req, res) => {
   try {
     const usuariosRes = await pool.query('SELECT id, nombre, usuario, contrasena_hash as password, rol, bloqueado FROM usuarios ORDER BY id ASC');
-    const precintosRes = await pool.query('SELECT id, numero_precinto, estado FROM precintos ORDER BY id ASC');
+    
+    // MODIFICADO: Ahora solicita la columna 'coto' de los precintos
+    const precintosRes = await pool.query('SELECT id, numero_precinto, estado, coto FROM precintos ORDER BY id ASC');
+    
     const asignacionesRes = await pool.query('SELECT id, usuario, precinto, coto, paraje, fecha, estado FROM asignaciones ORDER BY id DESC');
     const capturasRes = await pool.query('SELECT id, precinto, usuario, imagen, observaciones, coto, paraje, fecha, estado FROM capturas ORDER BY id DESC');
     const logsRes = await pool.query('SELECT l.id, l.accion, u.usuario, l.fecha FROM logs l LEFT JOIN usuarios u ON l.usuario = u.id ORDER BY l.id DESC');
@@ -35,22 +50,21 @@ app.get('/api/db', async (req, res) => {
       logs: logsMapeados
     });
   } catch (err) {
-    console.error("Error al leer de Supabase:", err.message);
-    res.status(500).send('Error al leer las tablas');
+    console.error(err);
+    res.status(500).send('Error al leer la base de datos');
   }
 });
 
-// 2. RUTA PARA GUARDAR Y RELLENAR TABLAS AUTOMÁTICAMENTE
+// 2. RUTA PARA GUARDAR Y ENVIAR POR CORREO ELECTRÓNICO
 app.post('/api/db', async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const { usuarios, precintos, asignaciones, capturas, logs } = req.body;
 
-    // Sincronizar Usuarios (Adaptado para evitar conflictos con BIGSERIAL)
+    // Sincronizar Usuarios
     if (usuarios && usuarios.length > 0) {
       for (let u of usuarios) {
-        // Comprobamos si el usuario ya existe por su nombre único de login
         const existe = await client.query('SELECT id FROM usuarios WHERE usuario = $1', [u.usuario]);
         if (existe.rows.length === 0) {
           await client.query(
@@ -67,19 +81,19 @@ app.post('/api/db', async (req, res) => {
       }
     }
 
-    // Sincronizar Precintos
+    // Sincronizar Precintos (Incluye la columna coto)
     if (precintos && precintos.length > 0) {
       for (let p of precintos) {
         const existe = await client.query('SELECT id FROM precintos WHERE numero_precinto = $1', [p.numero_precinto]);
         if (existe.rows.length === 0) {
           await client.query(
-            `INSERT INTO precintos (numero_precinto, estado) VALUES ($1, $2)`,
-            [p.numero_precinto, p.estado]
+            `INSERT INTO precintos (estado, numero_precinto, coto) VALUES ($1, $2, $3)`,
+            [p.estado, p.numero_precinto, p.coto || null]
           );
         } else {
           await client.query(
-            `UPDATE precintos SET estado = $2 WHERE numero_precinto = $1`,
-            [p.numero_precinto, p.estado]
+            `UPDATE precintos SET estado = $1, coto = $2 WHERE numero_precinto = $3`,
+            [p.estado, p.coto || null, p.numero_precinto]
           );
         }
       }
@@ -88,7 +102,6 @@ app.post('/api/db', async (req, res) => {
     // Sincronizar Asignaciones
     if (asignaciones && asignaciones.length > 0) {
       for (let a of asignaciones) {
-        // Buscamos las claves foráneas reales en Supabase
         const userRes = await client.query('SELECT id FROM usuarios WHERE id = $1', [a.usuario]);
         const sealRes = await client.query('SELECT id FROM precintos WHERE id = $1', [a.precinto]);
         
@@ -112,22 +125,57 @@ app.post('/api/db', async (req, res) => {
       }
     }
 
-    // Sincronizar Capturas
+    // Sincronizar Capturas (Envía por correo con adjunto y limpia la BD)
     if (capturas && capturas.length > 0) {
       for (let c of capturas) {
-        const userRes = await client.query('SELECT id FROM usuarios WHERE id = $1', [c.usuario]);
-        const sealRes = await client.query('SELECT id FROM precintos WHERE id = $1', [c.precinto]);
+        const userRes = await client.query('SELECT id, nombre FROM usuarios WHERE id = $1', [c.usuario]);
+        const sealRes = await client.query('SELECT id, numero_precinto FROM precintos WHERE id = $1', [c.precinto]);
         
         if (userRes.rows.length > 0 && sealRes.rows.length > 0) {
           const uId = userRes.rows[0].id;
           const pId = sealRes.rows[0].id;
+          const nombreCazador = userRes.rows[0].nombre;
+          const numPrecinto = sealRes.rows[0].numero_precinto;
 
-          const existe = await client.query('SELECT id FROM capturas WHERE precinto = $1 AND usuario = $2', [pId, uId]);
+          const existe = await client.query('SELECT id FROM capturas WHERE precinto = $1 AND usuario = $2 AND fecha = $3', [pId, uId, c.fecha]);
+          
           if (existe.rows.length === 0) {
+            // Si la captura viene con una foto real en Base64, enviamos el email antes de guardarla modificada
+            if (c.imagen && c.imagen.includes('data:image')) {
+              try {
+                await transporter.sendMail({
+                  from: `"Sistema de Control Cinegético" <${process.env.EMAIL_USER}>`,
+                  to: process.env.EMAIL_DESTINO,
+                  subject: `🚨 NUEVA CAPTURA REGISTRADA: ${numPrecinto}`,
+                  html: `
+                    <h2>Justificante de Registro de Pieza</h2>
+                    <p><strong>Cazador:</strong> ${nombreCazador}</p>
+                    <p><strong>Número de Precinto:</strong> ${numPrecinto}</p>
+                    <p><strong>Coto:</strong> ${c.coto}</p>
+                    <p><strong>Paraje:</strong> ${c.paraje}</p>
+                    <p><strong>Fecha/Hora:</strong> ${new Date(c.fecha).toLocaleString('es-ES')}</p>
+                    <p><strong>Observaciones:</strong> ${c.observaciones || 'Ninguna'}</p>
+                    <br/>
+                    <p><i>La foto de la pieza se adjunta a este correo electrónico y ha sido eliminada de la base de datos para optimizar espacio.</i></p>
+                  `,
+                  attachments: [
+                    {
+                      filename: `captura_${numPrecinto}.png`,
+                      path: c.imagen // Nodemailer adjunta directamente el Base64
+                    }
+                  ]
+                });
+                console.log(`Correo enviado con éxito para el precinto ${numPrecinto}`);
+              } catch (mailErr) {
+                console.error("Error crítico al enviar el correo electrónico:", mailErr);
+              }
+            }
+
+            // Guardamos en Supabase pero con el marcador liviano en vez de la foto completa
             await client.query(
               `INSERT INTO capturas (precinto, usuario, imagen, observaciones, coto, paraje, fecha, estado) 
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-              [pId, uId, c.imagen || '', c.observaciones, c.coto, c.paraje, c.fecha, c.estado]
+              [pId, uId, 'Enviada por Email ✉️', c.observaciones, c.coto, c.paraje, c.fecha, c.estado]
             );
           }
         }
@@ -161,11 +209,7 @@ app.post('/api/db', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Servidor API activo y conectado de forma estricta a Supabase.');
-});
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor API corriendo en el puerto ${PORT}`);
+  console.log(`Servidor ejecutándose en el puerto ${PORT}`);
 });
