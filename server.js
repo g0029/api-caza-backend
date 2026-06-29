@@ -23,6 +23,9 @@ app.get('/api/db', async (req, res) => {
     // Obtenemos las capturas tal cual están guardadas (con su imagen real)
     const capturasRes = await pool.query('SELECT id, precinto, usuario, imagen, observaciones, coto, paraje, fecha, estado FROM capturas ORDER BY id DESC');
     const logsRes = await pool.query('SELECT l.id, l.accion, u.usuario, l.fecha FROM logs l LEFT JOIN usuarios u ON l.usuario = u.id ORDER BY l.id DESC');
+    
+    // MODIFICADO: Leemos los datos de la tabla de configuración
+    const configRes = await pool.query('SELECT maximo_dias_mes FROM configuracion WHERE id = 1');
 
     const logsMapeados = logsRes.rows.map(row => ({
       id: row.id,
@@ -31,12 +34,16 @@ app.get('/api/db', async (req, res) => {
       fecha: row.fecha
     }));
 
+    // Si por algún motivo la fila 1 no existiera en la BD, mandamos el valor por defecto
+    const configuracionData = configRes.rows.length > 0 ? configRes.rows[0] : { maximo_dias_mes: 10 };
+
     res.json({
       usuarios: usuariosRes.rows,
       precintos: precintosRes.rows,
       asignaciones: asignacionesRes.rows,
       capturas: capturasRes.rows,
-      logs: logsMapeados
+      logs: logsMapeados,
+      configuracion: configuracionData // MODIFICADO: Enviamos la configuración a React
     });
   } catch (err) {
     console.error(err);
@@ -49,7 +56,17 @@ app.post('/api/db', async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { usuarios, precintos, asignaciones, capturas, logs } = req.body;
+    
+    // MODIFICADO: Añadimos "configuracion" a la de-estructuración del body
+    const { usuarios, precintos, asignaciones, capturas, logs, configuracion } = req.body;
+
+    // MODIFICADO: Sincronizar la Configuración Global (Fila con ID = 1)
+    if (configuracion && configuracion.maximo_dias_mes !== undefined) {
+      await client.query(
+        `UPDATE configuracion SET maximo_dias_mes = $1 WHERE id = 1`,
+        [parseInt(configuracion.maximo_dias_mes) || 10]
+      );
+    }
 
     // Sincronizar Usuarios
     if (usuarios && usuarios.length > 0) {
