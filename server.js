@@ -114,7 +114,7 @@ app.post('/api/db', async (req, res) => {
       }
     }
 
-    // Sincronizar Capturas (CORREGIDO: Ahora almacena directamente la foto real c.imagen)
+    // Sincronizar Capturas (Almacena directamente la foto real c.imagen)
     if (capturas && capturas.length > 0) {
       for (let c of capturas) {
         const userRes = await client.query('SELECT id FROM usuarios WHERE id = $1', [c.usuario]);
